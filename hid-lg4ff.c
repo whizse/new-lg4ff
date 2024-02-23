@@ -134,6 +134,7 @@ struct lg4ff_wheel_data {
 	u16 combine;
 	u16 range;
 	u16 autocenter;
+	u16 autocenter_strength;
 	u16 master_gain;
 	u16 gain;
 	const u16 min_range;
@@ -1821,8 +1822,8 @@ static ssize_t lg4ff_gain_store(struct device *dev, struct device_attribute *att
 }
 static DEVICE_ATTR(gain, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH, lg4ff_gain_show, lg4ff_gain_store);
 
-/* Export the currently set autocenter of the wheel */
-static ssize_t lg4ff_autocenter_show(struct device *dev, struct device_attribute *attr,
+/* Export the currently set autocenter strength of the wheel */
+static ssize_t lg4ff_autocenter_strength_show(struct device *dev, struct device_attribute *attr,
 				char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -1834,13 +1835,34 @@ static ssize_t lg4ff_autocenter_show(struct device *dev, struct device_attribute
 		return -EINVAL;
 	}
 
-	count = scnprintf(buf, PAGE_SIZE, "%u\n", entry->wdata.autocenter);
+	count = scnprintf(buf, PAGE_SIZE, "%u\n", entry->wdata.autocenter_strength);
 	return count;
 }
 
-/* Set autocenter to user specified value, call appropriate function
- * according to the type of the wheel */
-static ssize_t lg4ff_autocenter_store(struct device *dev, struct device_attribute *attr,
+/* Set autocenter strength to user specified value */
+static ssize_t lg4ff_autocenter_strength_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct lg4ff_device_entry *entry;
+	u16 autocenter_strength = simple_strtoul(buf, NULL, 10);
+
+	if (autocenter_strength > 0xffff) {
+		autocenter_strength = 0xffff;
+	}
+
+	entry = lg4ff_get_device_entry(hid);
+	if (entry == NULL) {
+		return -EINVAL;
+	}
+	entry->wdata.autocenter_strength = autocenter_strength;
+
+	return count;
+}
+
+/* Toggles autocenter on or off. Non-zero on, zero off. Call appropriate function
+ * according to the type of the wheel.  */
+static ssize_t lg4ff_autocenter_toggle(struct device *dev, struct device_attribute *attr,
 				 const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -1848,15 +1870,25 @@ static ssize_t lg4ff_autocenter_store(struct device *dev, struct device_attribut
 	struct input_dev *inputdev = hidinput->input;
 	u16 autocenter = simple_strtoul(buf, NULL, 10);
 
-	if (autocenter > 0xffff) {
-		autocenter = 0xffff;
-	}
+	/* Turn autocenter on with value set in autocenter_strength */
+	if (autocenter > 0) {
+		struct lg4ff_device_entry *entry;
 
-	inputdev->ff->set_autocenter(inputdev, autocenter);
+		entry = lg4ff_get_device_entry(hid);
+		if (entry == NULL) {
+			return -EINVAL;
+       	}
+		inputdev->ff->set_autocenter(inputdev, entry->wdata.autocenter_strength);
+	}
+	/* Turn autocenter off */
+	else {
+		inputdev->ff->set_autocenter(inputdev, 0);
+	}
 
 	return count;
 }
-static DEVICE_ATTR(autocenter, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH, lg4ff_autocenter_show, lg4ff_autocenter_store);
+static DEVICE_ATTR(autocenter, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH, lg4ff_autocenter_strength_show, lg4ff_autocenter_toggle);
+static DEVICE_ATTR(autocenter_strength, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH, lg4ff_autocenter_strength_show, lg4ff_autocenter_strength_store);
 
 static ssize_t lg4ff_spring_level_show(struct device *dev, struct device_attribute *attr,
 				char *buf)
@@ -2382,6 +2414,9 @@ int lg4ff_init(struct hid_device *hid)
 			error = device_create_file(&hid->dev, &dev_attr_autocenter);
 			if (error)
 				hid_warn(hid, "Unable to create sysfs interface for \"autocenter\", errno %d\n", error);
+			error = device_create_file(&hid->dev, &dev_attr_autocenter_strength);
+			if (error)
+				hid_warn(hid, "Unable to create sysfs interface for \"autocenter_strength\", errno %d\n", error);
 		}
 		error = device_create_file(&hid->dev, &dev_attr_peak_ffb_level);
 		if (error)
@@ -2472,6 +2507,7 @@ int lg4ff_deinit(struct hid_device *hid)
 		device_remove_file(&hid->dev, &dev_attr_gain);
 		if (test_bit(FF_AUTOCENTER, dev->ffbit)) {
 			device_remove_file(&hid->dev, &dev_attr_autocenter);
+			device_remove_file(&hid->dev, &dev_attr_autocenter_strength);
 		}
 		device_remove_file(&hid->dev, &dev_attr_peak_ffb_level);
 		if (test_bit(FF_SPRING, dev->ffbit)) {
